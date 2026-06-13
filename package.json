@@ -1,0 +1,41 @@
+{
+  "name": "claude-pr-review-loop",
+  "version": "1.0.0",
+  "description": "Install the /pr-review-loop skill for Claude Code globally — request the repo's @claude CI review and drive the fix loop, event-driven, in-session.",
+  "bin": {
+    "claude-pr-review-loop": "bin/cli.js",
+    "pr-review-loop": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "skill/",
+    "template/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node bin/cli.js help"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "skill",
+    "pull-request",
+    "code-review",
+    "github-actions",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adevra/claude-pr-review-loop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/adevra/claude-pr-review-loop/issues"
+  },
+  "homepage": "https://github.com/adevra/claude-pr-review-loop#readme",
+  "author": "adevra",
+  "license": "MIT"
+}

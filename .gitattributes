@@ -1,0 +1,3 @@
+# The watcher runs under Git Bash — CRLF would break the shebang/parsing on Windows checkouts.
+*.sh text eol=lf
+bin/cli.js text eol=lf
