@@ -15,7 +15,12 @@
 # Correlation is by TIMESTAMP, not headSha: every claude.yml run fires on `issue_comment` and (on
 # this repo) executes against the default branch, so ALL runs share main's headSha regardless of
 # which PR the comment was on. Our run is therefore the OLDEST claude.yml issue_comment run created
-# at/after <since> — i.e. the first run triggered once our comment landed.
+# at/after <since> — i.e. the first run triggered once our comment landed — EXCLUDING runs that
+# concluded "skipped". The claude-code-action posts its own status/eyes comment, which fires a
+# sibling claude.yml run that the job's `if:` condition skips; that skipped sibling is often created
+# at (or within a second of) our @claude comment, so a naive "oldest at/after <since>" match latches
+# onto it instead of the real review. We therefore prefer the oldest NON-skipped run, and fall back
+# to a skipped run only when no real run appears (so a genuine non-trigger still reports "skipped").
 
 set -uo pipefail
 
@@ -30,16 +35,27 @@ if [ -z "$PR" ] || [ -z "$SINCE" ]; then
   exit 2
 fi
 
-# --- Discovery: our run = oldest claude.yml issue_comment run created at/after SINCE ---
+# --- Discovery: our run = oldest claude.yml issue_comment run created at/after SINCE whose
+# conclusion is NOT "skipped" (queued/in-progress runs have an empty conclusion, so they qualify).
+# This skips the action's own skipped status-comment sibling; see the header note.
 RUN_ID=""
 for _ in $(seq 1 "$DISCOVERY_TRIES"); do
   RUN_ID=$(gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 50 \
-    --json databaseId,createdAt \
-    --jq "[.[] | select(.createdAt >= \"$SINCE\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
+    --json databaseId,createdAt,conclusion \
+    --jq "[.[] | select(.createdAt >= \"$SINCE\") | select(.conclusion != \"skipped\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
     2>/dev/null || true)
   [ -n "$RUN_ID" ] && break
   sleep "$DISCOVERY_SLEEP"
 done
+
+# Fallback: no non-skipped run appeared in the window. If a skipped sibling exists at/after SINCE,
+# surface it (the @claude comment most likely did not actually trigger a review); else report no_run.
+if [ -z "$RUN_ID" ]; then
+  RUN_ID=$(gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 50 \
+    --json databaseId,createdAt,conclusion \
+    --jq "[.[] | select(.createdAt >= \"$SINCE\") | select(.conclusion == \"skipped\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
+    2>/dev/null || true)
+fi
 
 if [ -z "$RUN_ID" ]; then
   echo "WATCH_RESULT: no_run  pr=$PR  since=$SINCE"

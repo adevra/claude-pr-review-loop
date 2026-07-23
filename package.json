@@ -1,6 +1,6 @@
 {
   "name": "claude-pr-review-loop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Install the /pr-review-loop skill for Claude Code globally — request the repo's @claude CI review and drive the fix loop, event-driven, in-session.",
   "bin": {
     "claude-pr-review-loop": "bin/cli.js",
