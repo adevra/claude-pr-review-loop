@@ -27,8 +27,8 @@ set -uo pipefail
 PR="${1:-}"
 SINCE="${2:-}"
 WORKFLOW="claude.yml"
-DISCOVERY_TRIES=30   # ~90s — the run can take several seconds to register after the comment
-DISCOVERY_SLEEP=3
+DISCOVERY_TRIES=60   # ~180s — `gh run list` has been observed NOT surfacing a run for well over
+DISCOVERY_SLEEP=3    # 90s after it was created (see the re-confirm step below), so be patient.
 
 if [ -z "$PR" ] || [ -z "$SINCE" ]; then
   echo "WATCH_RESULT: error  usage: watch-claude-review.sh <pr> <since-iso8601>"
@@ -48,13 +48,38 @@ for _ in $(seq 1 "$DISCOVERY_TRIES"); do
   sleep "$DISCOVERY_SLEEP"
 done
 
-# Fallback: no non-skipped run appeared in the window. If a skipped sibling exists at/after SINCE,
-# surface it (the @claude comment most likely did not actually trigger a review); else report no_run.
+# Fallback: no non-skipped run appeared in the window. Before concluding that the comment did not
+# trigger a review, RE-CONFIRM after a pause. Observed 2026-07-25 on PR #227: the real review run was
+# created 1s after SINCE, yet the discovery query returned empty for the entire window and the watcher
+# reported the skipped sibling — the run simply was not surfaced by `gh run list` yet (the query
+# returns it correctly when replayed later). A skipped-run verdict is therefore only trustworthy if
+# it still holds after the API has had more time.
 if [ -z "$RUN_ID" ]; then
-  RUN_ID=$(gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 50 \
+  sleep 30
+  RUN_ID=$(gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 100 \
     --json databaseId,createdAt,conclusion \
-    --jq "[.[] | select(.createdAt >= \"$SINCE\") | select(.conclusion == \"skipped\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
+    --jq "[.[] | select(.createdAt >= \"$SINCE\") | select(.conclusion != \"skipped\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
     2>/dev/null || true)
+
+  if [ -n "$RUN_ID" ]; then
+    echo "NOTE: the real run only became visible on the re-confirm poll (API lag) — using it."
+  else
+    RUN_ID=$(gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 100 \
+      --json databaseId,createdAt,conclusion \
+      --jq "[.[] | select(.createdAt >= \"$SINCE\") | select(.conclusion == \"skipped\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
+      2>/dev/null || true)
+
+    # Whatever we conclude, show the candidates so a wrong verdict is diagnosable rather than silent.
+    if [ -n "$RUN_ID" ]; then
+      echo "NOTE: only skipped run(s) found at/after $SINCE. Candidates seen:"
+      gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 100 \
+        --json databaseId,createdAt,status,conclusion \
+        --jq "[.[] | select(.createdAt >= \"$SINCE\")] | sort_by(.createdAt) | .[] | \"  \(.createdAt)  id=\(.databaseId)  \(.status)/\(.conclusion)\"" \
+        2>/dev/null || true
+      echo "If a non-skipped run appears above, this was API lag — re-watch it directly:"
+      echo "  gh run watch <id>"
+    fi
+  fi
 fi
 
 if [ -z "$RUN_ID" ]; then
