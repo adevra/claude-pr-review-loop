@@ -69,8 +69,9 @@ When the background command completes you'll see a `WATCH_RESULT:` line:
 - `WATCH_RESULT: done … conclusion=skipped` or any non-success → surface the run URL; do not parse
   findings. Stop.
 
-If the review has **no actionable findings** (approve/clean), report "the review came back clean"
-and **stop — do not prompt**.
+If the review has **no actionable findings** (approve/clean), report "the review came back clean",
+skip Question A, and go straight to **Step 7** so the user can still choose to merge, merge it
+themselves, or run another round.
 
 ## Step 5 — Gate: fix or leave (Question A)
 
@@ -87,19 +88,34 @@ Apply **`superpowers:receiving-code-review` discipline** — do not implement ve
 - For each finding you do **not** act on (false positive, technically wrong, or out-of-scope), name
   it and give a one-line reason in your summary, so the developer sees the full picture.
 
-Commit the fixes. Then ask with **AskUserQuestion** (note: **both options push** — the only choice
-is whether to re-trigger a review):
+Commit the fixes and **push** them. Then go to Step 7.
 
-- **Push & request another review** → push, post `@claude please review this PR.`, capture a fresh
-  `SINCE`, relaunch the watcher (Step 3's background command), end the turn → back to Step 4.
-- **Push, skip re-review** → push the fixes and stop.
+## Step 7 — Gate: what happens to the PR (Question B)
+
+The fixes are already pushed, so this asks what to do with the PR. Ask with **AskUserQuestion**,
+offering exactly these three:
+
+- **Approve the merge** → merge it: `gh pr merge <n> --squash`. This option, and only this option, is
+  the explicit approval that a merge into the default branch requires; the user picking it here *is*
+  that approval, so do not ask a second time. If the merge is refused (branch protection, a
+  permission rule, or a harness classifier), say so plainly, give the exact command, and stop rather
+  than working around it.
+- **I'll merge it myself** → stop. Report the PR number and URL and leave it open. Do not merge.
+- **Run another review round** → post `@claude please review this PR.`, capture a fresh `SINCE`,
+  relaunch the watcher (Step 3's background command), end the turn → back to Step 4.
+
+If the round cap below is already spent, drop the third option and offer only the first two.
+
+Never merge on any other path through this skill. A clean review is not approval, and neither is
+"Fix now" in Step 5.
 
 ## Round cap
 
 At most **2 review cycles** per invocation (round 1 = the initial review; round 2 = the one
 re-review reachable via Question B). After the round-2 review is handled, if the user again chooses
-to fix, **push the fixes but do NOT trigger a third review** — drop the "request another review"
-option, report, and hand back. This prevents runaway CI.
+to fix, **push the fixes but do NOT trigger a third review** — drop "Run another review round" from
+Question B, leaving "Approve the merge" and "I'll merge it myself", report, and hand back. This
+prevents runaway CI.
 
 ## Edge cases
 
@@ -107,9 +123,10 @@ option, report, and hand back. This prevents runaway CI.
 |-----------|-----------|
 | Working tree dirty, or on `main`/`master` | Refuse in Step 1; explain why. |
 | PR already exists for the branch | Reuse it; don't open a duplicate. |
+| Merge refused (protection/permission/classifier) | Say so, give the exact command, stop. Never work around it. |
 | `WATCH_RESULT: no_run` | Comment likely didn't fire the workflow (or no `claude.yml`); report and stop. |
 | Run conclusion ≠ success | Surface the run URL; don't parse findings. |
-| Review came back clean | Report "clean", skip Question A. |
+| Review came back clean | Report "clean", skip Question A, go to Step 7 (merge gate). |
 
 ## Notes
 
