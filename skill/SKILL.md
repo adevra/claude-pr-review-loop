@@ -1,6 +1,6 @@
 ---
 name: pr-review-loop
-description: Use after finishing a change on a feature branch when you want the repo's @claude CI review and to handle its findings in THIS session. Pushes the branch, opens/uses the PR, requests the review, waits event-driven for CI to finish (a background watcher re-invokes the session — no polling), then drives a gated fix loop (round cap 2). Invoke as /pr-review-loop.
+description: Use after finishing a change on a feature branch when you want the repo's @claude CI review and to handle its findings in THIS session. Pushes the branch, opens/uses the PR, requests the review, waits event-driven for CI to finish (a background watcher re-invokes the session — no polling), then drives a gated fix loop (round cap 2). Invoke as /pr-review-loop, or /pr-review-loop auto [pr] for auto mode (fixes without asking, merges low-risk PRs per the repo's .claude/pr-review-loop.json policy, asks for the rest).
 ---
 
 # /pr-review-loop — request and handle a Claude PR review, in-session
@@ -14,6 +14,12 @@ Depends on the repo having a `.github/workflows/claude.yml` that fires on a comm
 `@claude` (the standard `anthropics/claude-code-action` workflow). That workflow is never modified by
 this skill. A repo that doesn't have it yet can scaffold one with
 `npx github:adevra/claude-pr-review-loop init`.
+
+**Two modes.** Default mode is Steps 1–7 exactly as written: every fix and every merge is gated
+on the user. **Auto mode** is opt-in and changes only Steps 5 and 7 — see [Auto mode](#auto-mode)
+below. It is on only when the invocation carries the argument `auto` (e.g. `/pr-review-loop auto`
+or `/pr-review-loop auto 540`), or the user/caller has stated in this session that auto mode is
+on. Otherwise you are in default mode, even if a previous invocation used auto.
 
 ## Step 1 — Preconditions (refuse early if unmet)
 
@@ -75,6 +81,8 @@ themselves, or run another round.
 
 ## Step 5 — Gate: fix or leave (Question A)
 
+(Auto mode: skip this step — see [Auto mode](#auto-mode).)
+
 Summarize the findings, then ask with **AskUserQuestion**:
 
 - **Fix now** → go to Step 6.
@@ -92,6 +100,8 @@ Commit the fixes and **push** them. Then go to Step 7.
 
 ## Step 7 — Gate: what happens to the PR (Question B)
 
+(Auto mode: replaced by the policy decision — see [Auto mode](#auto-mode).)
+
 The fixes are already pushed, so this asks what to do with the PR. Ask with **AskUserQuestion**,
 offering exactly these three:
 
@@ -107,7 +117,8 @@ offering exactly these three:
 If the round cap below is already spent, drop the third option and offer only the first two.
 
 Never merge on any other path through this skill. A clean review is not approval, and neither is
-"Fix now" in Step 5.
+"Fix now" in Step 5. (In default mode this is absolute. Auto mode's policy merge is the single
+other path, and it exists only when auto mode is on.)
 
 ## Round cap
 
@@ -116,6 +127,61 @@ re-review reachable via Question B). After the round-2 review is handled, if the
 to fix, **push the fixes but do NOT trigger a third review** — drop "Run another review round" from
 Question B, leaving "Approve the merge" and "I'll merge it myself", report, and hand back. This
 prevents runaway CI.
+
+## Auto mode
+
+Opt-in (activation: see "Two modes" at the top). Steps 1–4 and 6, the watcher, and the round cap
+(2) are unchanged. A trailing number (`/pr-review-loop auto 540`) names the PR to use instead of
+looking it up from the branch. Auto mode changes two things:
+
+### Step 5 in auto mode — no Question A
+
+Do not ask. Go straight to Step 6: fix the findings you judge valid, list every declined finding
+with a one-line reason, commit, push. If that push moved the tip and the round cap allows, start
+the next review round yourself (Step 3: new `@claude` comment, fresh `SINCE`, relaunch the watcher,
+end the turn). If the round cap is spent, the pushed fixes are unreviewed — go to Step 7 (auto),
+where that forces an ask.
+
+### Step 7 in auto mode — the policy decides: ask or merge
+
+1. Run the bundled policy check (it reads `.claude/pr-review-loop.json` from the PR's **base**
+   branch, so a PR cannot loosen its own gate, and measures the PR with `gh pr view --json
+   additions,deletions,changedFiles` + `gh pr diff --name-only`):
+
+   ```bash
+   node "$HOME/.claude/skills/pr-review-loop/merge-policy.js" "$PR"
+   ```
+
+   Policy file schema (all keys optional; these are the defaults when the file or a key is missing):
+
+   ```json
+   { "ask_paths": [], "max_changed_lines": 1500, "max_changed_files": 25 }
+   ```
+
+   `ask_paths` globs match repo-relative paths: `*` stays inside one path segment, `**` spans
+   segments, `?` is one character, `{a,b}` alternates. A pattern without `**/` matches from the repo
+   root only (`**/*.sql` for "any `.sql` anywhere"). A change to the policy file itself always asks.
+
+2. **ASK** the user (AskUserQuestion) if **any** of these holds:
+   - the check printed `"decision": "ask"` — a changed file matches `ask_paths`, additions+deletions
+     > `max_changed_lines`, changed files > `max_changed_files`, the PR is a draft or not open, or
+     the check itself failed (it fails closed);
+   - any review finding was declined or left open (in any round);
+   - the latest review is not clean — including fixes pushed after the last review because the
+     round cap was spent.
+
+   The question carries a short summary: what changed (files/lines, the matching `ask_paths`),
+   why it needs them (each triggered rule), and the review verdict (clean / findings fixed /
+   declined ones with reasons). Offer exactly Step 7's default-mode options ("Approve the merge",
+   "I'll merge it myself", and "Run another review round" only if the round cap allows); the answer
+   is handled exactly as in default mode.
+
+3. **OTHERWISE MERGE**: `gh pr merge "$PR" --squash`. The merge stays subject to the repo's own
+   gates — branch protection, required checks, merge hooks, receipts. If anything refuses it, stop
+   and report the refusal and the exact command; never work around it or retry it in another
+   form. After merging, say what was merged
+   (PR, squash SHA) and why no ask was needed (the policy source, the measured lines/files, "no
+   ask_paths matched", clean review, nothing declined).
 
 ## Edge cases
 
@@ -127,6 +193,9 @@ prevents runaway CI.
 | `WATCH_RESULT: no_run` | Comment likely didn't fire the workflow (or no `claude.yml`); report and stop. |
 | Run conclusion ≠ success | Surface the run URL; don't parse findings. |
 | Review came back clean | Report "clean", skip Question A, go to Step 7 (merge gate). |
+| Auto mode, policy check fails or no policy file | Fails closed → ask. No file on base → defaults (`[]`, 1500, 25). |
+| Auto mode, PR edits `.claude/pr-review-loop.json` | Always ask; the policy is read from the base branch anyway. |
+| Auto mode, merge refused by a hook/protection | Stop, report the refusal + exact command. Never work around it. |
 
 ## Notes
 

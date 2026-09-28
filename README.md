@@ -36,7 +36,8 @@ claude setup-token                       # generate a Claude Code OAuth token
 gh secret set CLAUDE_CODE_OAUTH_TOKEN     # paste it when prompted
 ```
 
-Commit the workflow and you're set.
+`init` also drops a sample `.claude/pr-review-loop.json` (only read by [auto mode](#auto-mode-opt-in));
+edit its `ask_paths` for the repo. Existing files are never overwritten. Commit both and you're set.
 
 ## Usage
 
@@ -58,6 +59,44 @@ It will:
    `receiving-code-review` discipline — valid findings get fixed, declined ones get a one-line
    reason.
 6. **Optionally re-review** once (round cap of 2, so CI never runs away).
+7. **Gate the merge** (`AskUserQuestion`): *Approve the merge*, *I'll merge it myself*, or *Run
+   another review round*. Nothing merges unless you pick the first.
+
+## Auto mode (opt-in)
+
+```
+/pr-review-loop auto          # this branch's PR
+/pr-review-loop auto 540      # a specific PR
+```
+
+Or tell the session "auto mode on". Without that, the skill behaves exactly as above.
+
+In auto mode the skill does not ask before fixing: it fixes the valid findings, lists the declined
+ones with a reason, pushes and re-reviews within the same round cap. At the merge step, a
+per-repo policy decides:
+
+- It **asks you** if any changed file matches `ask_paths`, the diff is bigger than
+  `max_changed_lines` (additions + deletions) or `max_changed_files`, any finding was declined or
+  left open, or the latest review isn't clean.
+- **Otherwise it merges** (`gh pr merge --squash`) and tells you why no ask was needed. Branch
+  protection, required checks and your own merge hooks still apply; if one refuses, it stops and
+  reports rather than working around it.
+
+The policy lives in the repo at `.claude/pr-review-loop.json` (`init` scaffolds a sample):
+
+```json
+{
+  "ask_paths": [".github/**", "**/migrations/**", "**/*.sql", "package.json"],
+  "max_changed_lines": 1500,
+  "max_changed_files": 25
+}
+```
+
+Missing file or keys fall back to `[]`, `1500`, `25`. Globs: `*` within a path segment, `**`
+across segments, `?`, `{a,b}`; patterns anchor at the repo root. The file is read from the PR's
+**base** branch, and a PR that edits it always asks, so a PR cannot loosen its own gate. The
+mechanical check is `skill/merge-policy.js` (`node merge-policy.js <pr>` prints the decision as
+JSON; any error fails closed to "ask").
 
 ## How it works
 
@@ -65,7 +104,9 @@ It will:
 |------|------|
 | `skill/SKILL.md` | The orchestrator Claude follows when you run `/pr-review-loop`. |
 | `skill/watch-claude-review.sh` | Background watcher. Correlates *your* review run by the `@claude` comment's `createdAt` (timestamp, **not** head SHA — every `claude.yml` run shares `main`'s SHA), blocks on `gh run watch`, then prints `WATCH_RESULT:` and exits, which re-invokes the session. |
+| `skill/merge-policy.js` | Auto mode's merge-policy check: reads `.claude/pr-review-loop.json` from the base branch, measures the PR with `gh`, prints `ask`/`eligible` + reasons. |
 | `template/claude.yml` | The standard `anthropics/claude-code-action` workflow `init` scaffolds. |
+| `template/pr-review-loop.json` | Sample auto-mode policy `init` scaffolds into `.claude/`. |
 
 The CI workflow itself is **never modified** by the skill.
 
@@ -73,7 +114,7 @@ The CI workflow itself is **never modified** by the skill.
 
 ```
 npx github:adevra/claude-pr-review-loop            # install the skill (default)
-npx github:adevra/claude-pr-review-loop init       # scaffold claude.yml in the current repo
+npx github:adevra/claude-pr-review-loop init       # scaffold claude.yml + .claude/pr-review-loop.json
 npx github:adevra/claude-pr-review-loop uninstall   # remove the global skill
 npx github:adevra/claude-pr-review-loop help
 ```

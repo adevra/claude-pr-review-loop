@@ -8,7 +8,7 @@
  * Zero runtime dependencies. Node >= 16.
  *
  *   npx github:adevra/claude-pr-review-loop            # install the skill globally (~/.claude/skills)
- *   npx github:adevra/claude-pr-review-loop init       # scaffold .github/workflows/claude.yml here
+ *   npx github:adevra/claude-pr-review-loop init       # scaffold claude.yml + .claude/pr-review-loop.json here
  *   npx github:adevra/claude-pr-review-loop uninstall   # remove the global skill
  */
 
@@ -86,12 +86,20 @@ function init() {
     copyFile(path.join(TEMPLATE_SRC, 'claude.yml'), dest);
     ok('Scaffolded .github/workflows/claude.yml');
   }
+  const policyDest = path.join(process.cwd(), '.claude', 'pr-review-loop.json');
+  if (fs.existsSync(policyDest)) {
+    info(`.claude/pr-review-loop.json already exists — leaving it untouched.`);
+  } else {
+    copyFile(path.join(TEMPLATE_SRC, 'pr-review-loop.json'), policyDest);
+    ok(`Scaffolded .claude/pr-review-loop.json ${dim('(auto-mode merge policy — edit ask_paths for this repo)')}`);
+  }
   console.log('');
   console.log(bold('One required secret') + ' — the workflow needs a Claude Code OAuth token:');
   console.log(`  ${dim('1.')} Generate one:  ${cyan('claude setup-token')}`);
   console.log(`  ${dim('2.')} Add it to the repo:  ${cyan('gh secret set CLAUDE_CODE_OAUTH_TOKEN')}`);
   console.log('');
-  console.log(`Commit the workflow, then ${bold('/pr-review-loop')} will be able to drive reviews here.`);
+  console.log(`Commit both files, then ${bold('/pr-review-loop')} will be able to drive reviews here`);
+  console.log(`(${bold('/pr-review-loop auto')} merges low-risk PRs per the policy file and asks for the rest).`);
   console.log('');
 }
 
@@ -115,7 +123,7 @@ ${bold('Usage')}
 
 ${bold('Commands')}
   ${cyan('install')}     ${dim('(default)')} Install the skill into ~/.claude/skills (user scope)
-  ${cyan('init')}        Scaffold .github/workflows/claude.yml in the current repo
+  ${cyan('init')}        Scaffold .github/workflows/claude.yml + .claude/pr-review-loop.json in the current repo
   ${cyan('uninstall')}   Remove the global skill
   ${cyan('help')}        Show this message
 `);
