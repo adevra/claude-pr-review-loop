@@ -169,7 +169,7 @@ function evaluate({ pr, repoFlag, info, files, policy, policySource, expectHead 
   if (askMatches.length) reasons.push(`${askMatches.length} changed path(s) match ask_paths`);
   if (changedLines > policy.max_changed_lines) reasons.push(`${changedLines} changed lines > max_changed_lines ${policy.max_changed_lines}`);
   if (changedFiles > policy.max_changed_files) reasons.push(`${changedFiles} changed files > max_changed_files ${policy.max_changed_files}`);
-  if (!MERGEABLE_STATES.includes(info.mergeStateStatus)) reasons.push(`mergeStateStatus is ${info.mergeStateStatus || 'missing'}, not CLEAN`);
+  if (!MERGEABLE_STATES.includes(info.mergeStateStatus)) reasons.push(`mergeStateStatus is ${info.mergeStateStatus || 'missing'}, not CLEAN or HAS_HOOKS`);
   if (checks.failing.length) reasons.push(`failing checks: ${checks.failing.join(', ')}`);
   if (checks.pending.length) reasons.push(`pending checks: ${checks.pending.join(', ')}`);
   if (!expectHead) reasons.push('no --expect-head given (the reviewed SHA), so the merge cannot be pinned');

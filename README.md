@@ -86,7 +86,8 @@ per-repo policy decides. It **asks you** if any of these hold:
   the policy file;
 - the diff is bigger than `max_changed_lines` (additions + deletions) or `max_changed_files`;
 - the PR is a draft, closed, or comes from a fork;
-- GitHub's `mergeStateStatus` is not `CLEAN`, or any status check is failing or pending;
+- GitHub's `mergeStateStatus` is not `CLEAN` (or `HAS_HOOKS`), or any status check is failing or
+  pending;
 - the PR head is not the commit the last review saw;
 - any finding was declined or left open, or the latest review isn't clean.
 
@@ -120,8 +121,10 @@ What the skill trusts, and what you should lock down.
 
 **The review is read from one account only.** The skill accepts review output only from the
 Claude GitHub App's bot account, `claude[bot]` with account type `Bot`, and only output tied to the
-exact workflow run its own comment started (the comment links that run; formal reviews and inline
-comments must fall inside the run's time window). `[bot]` accounts cannot be registered by people.
+exact workflow run its own comment started: the watcher only follows runs triggered by your `gh`
+user, the fetcher checks the run's event, workflow and triggering actor again, and a review counts
+only if the bot's comment links that run (formal reviews and inline comments are added on top when
+posted while the run was live). `[bot]` accounts cannot be registered by people.
 A matching-by-prefix check (`login startswith "claude"`) is *not* safe: `claude` is a real human
 GitHub account, GraphQL reports the bot as plain `claude`, and anyone can register `claude-review`.
 Versions before 1.2.0 used such a prefix check; upgrade. If your workflow runs the action as your

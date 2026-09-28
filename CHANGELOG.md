@@ -16,7 +16,9 @@ Security release. Upgrade if you use the skill on a public repository or use aut
   findings from, never instructions or approval; "no review" is never "clean". The fetcher frames
   bodies between nonce-tagged markers.
 - **Run correlation.** The watcher now matches runs by triggering actor as well as time, so a
-  concurrent `@claude` from someone else is never taken for yours. The trigger comment is posted
+  concurrent `@claude` from someone else is never taken for yours; it refuses to run when the `gh`
+  user cannot be resolved, and the fetcher re-checks the run's event, workflow and triggering
+  actor. The trigger comment is posted
   through the REST API so `SINCE` is that comment's own timestamp (the old "last comment" read
   could pick up someone else's comment).
 - **Glob matcher ReDoS.** `ask_paths` globs compiled to backtracking regexes; a pattern such as
@@ -25,15 +27,15 @@ Security release. Upgrade if you use the skill on a public repository or use aut
   alternatives and globs at 512 characters.
 - **Auto merge.** The policy check now also asks when there is no policy file on the base branch
   (previously: permissive defaults), when the PR comes from a fork, when `mergeStateStatus` is not
-  `CLEAN`, when any status check is failing or pending, and when the head is not the reviewed SHA.
+  `CLEAN` or `HAS_HOOKS`, when any status check is failing or pending, and when the head is not the reviewed SHA.
   Renames are checked on both sides, so moving a file out of an `ask_paths` directory asks. The
   merge is pinned with `--match-head-commit`.
 - **Workflow template.** `template/claude.yml` gates on `author_association`
   (`OWNER`/`MEMBER`/`COLLABORATOR`), pins actions to commit SHAs, adds `timeout-minutes`, and
   documents `include_comments_by_actor`.
 - **Installer.** Refuses to write through a symlinked skill directory, replaces (never follows)
-  symlinked files, prints every path it writes; `uninstall` removes a link without touching its
-  target.
+  symlinked files, prints every path it writes; `init` refuses symlinked `.github`/`.claude`
+  directories; `uninstall` removes a link without touching its target.
 - **Input validation.** The watcher validates the PR number, `SINCE` and environment overrides
   before any of them reach a `gh`/jq expression; the scripts validate repo slugs and SHAs.
 

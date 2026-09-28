@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { selectReview, isReviewBot, linksRun } = require('../skill/fetch-review.js');
+const { selectReview, checkRun, isReviewBot, linksRun } = require('../skill/fetch-review.js');
 
 let failed = 0;
 let passed = 0;
@@ -64,6 +64,7 @@ test('a fake clean review from a look-alike account is ignored', () => {
 });
 test('bot reviews and inline comments count only inside the run window', () => {
   const out = sel({
+    comments: [{ id: 12, user: realBot, body: link(RUN_ID), updated_at: '2026-09-28T20:34:02Z' }],
     reviews: [
       { id: 7, user: realBot, state: 'COMMENTED', body: 'in window', submitted_at: '2026-09-28T20:33:30Z' },
       { id: 8, user: realBot, state: 'COMMENTED', body: 'earlier run', submitted_at: '2026-09-28T19:00:00Z' },
@@ -79,6 +80,38 @@ test('bot reviews and inline comments count only inside the run window', () => {
 test('no bot output for this run → not found (never "clean")', () => {
   assert.strictEqual(sel({ comments: [{ id: 11, user: realBot, body: link('222'), updated_at: '2026-09-28T20:34:00Z' }] }).found, false);
 });
+
+test('time-correlated reviews never count without the linked comment', () => {
+  const out = sel({
+    reviews: [{ id: 13, user: realBot, state: 'COMMENTED', body: 'another run, same PR', submitted_at: '2026-09-28T20:33:30Z' }],
+    inline: [{ id: 14, user: realBot, body: 'x', created_at: '2026-09-28T20:33:40Z', path: 'a.ts', line: 1 }],
+  });
+  assert.strictEqual(out.found, false);
+  assert.deepStrictEqual([out.reviews.length, out.inline.length], [0, 0]);
+});
+test('output after the run ended is not attributed to it', () => {
+  const out = sel({
+    comments: [{ id: 15, user: realBot, body: link(RUN_ID), updated_at: '2026-09-28T20:34:02Z' }],
+    reviews: [{ id: 16, user: realBot, state: 'COMMENTED', body: 'next run', submitted_at: '2026-09-28T20:34:30Z' }],
+  });
+  assert.deepStrictEqual(out.reviews, []);
+});
+
+// Run checks -----------------------------------------------------------------------------------
+const goodRun = { event: 'issue_comment', path: '.github/workflows/claude.yml', triggering_actor: { login: 'me' }, status: 'completed', conclusion: 'success' };
+const ctx = { workflow: 'claude.yml', me: 'me' };
+test('checkRun accepts our successful review run', () => assert.strictEqual(checkRun(goodRun, ctx), null));
+for (const [label, over] of [
+  ['someone else triggered it', { triggering_actor: { login: 'stranger' } }],
+  ['no triggering actor', { triggering_actor: null }],
+  ['other event', { event: 'push' }],
+  ['other workflow', { path: '.github/workflows/deploy.yml' }],
+  ['look-alike workflow name', { path: '.github/workflows/notclaude.yml' }],
+  ['still running', { status: 'in_progress', conclusion: null }],
+  ['failed', { conclusion: 'failure' }],
+]) {
+  test('checkRun rejects: ' + label, () => assert.ok(checkRun({ ...goodRun, ...over }, ctx)));
+}
 
 if (failed) { console.error(`fetch-review tests: ${failed} failed, ${passed} passed`); process.exit(1); }
 console.log(`fetch-review tests: ${passed} passed`);

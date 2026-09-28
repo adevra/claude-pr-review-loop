@@ -43,16 +43,16 @@ if ! [[ "$WORKFLOW" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] || ! [[ "$TIMEOUT_MIN" =~ ^[0
   echo "WATCH_RESULT: error  PR_REVIEW_LOOP_WORKFLOW must be a workflow file name and PR_REVIEW_LOOP_TIMEOUT a number of minutes"
   exit 2
 fi
+TIMEOUT_MIN=$((10#$TIMEOUT_MIN))
 
+# Without our own login we cannot tell our run from a stranger's, so refuse rather than guess.
 ME=$(gh api user --jq '.login' 2>/dev/null || true)
 if ! [[ "$ME" =~ ^[A-Za-z0-9-]+$ ]]; then
-  ME=""
-  echo "NOTE: could not resolve the gh user; discovery falls back to timestamp only."
+  echo "WATCH_RESULT: error  could not resolve the gh user (gh api user); refusing timestamp-only run discovery"
+  exit 0
 fi
 PR_TITLE=$(gh pr view "$PR" --json title --jq '.title' 2>/dev/null || true)
-
-ACTOR_FILTER='true'
-[ -n "$ME" ] && ACTOR_FILTER=".triggering_actor.login == \"$ME\""
+ACTOR_FILTER=".triggering_actor.login == \"$ME\""
 
 # Prints "id<TAB>display_title" per matching run, oldest first. $1 = "skipped" or "not-skipped".
 list_runs() {

@@ -7,8 +7,8 @@ description: Use after finishing a change on a feature branch when you want the 
 
 Automates the loop you'd otherwise do by hand: push → comment `@claude` → wait for CI → read the
 findings → fix → optionally re-review. The waiting is **event-driven**: a background script
-(`watch-claude-review.sh`, bundled next to this skill) blocks on `gh run watch` and, when it exits,
-the harness re-invokes this session with the result. You burn no turns polling.
+(`watch-claude-review.sh`, bundled next to this skill) waits for the review run (bounded) and,
+when it exits, the harness re-invokes this session with the result. You burn no turns polling.
 
 Depends on the repo having a `.github/workflows/claude.yml` that fires on a comment containing
 `@claude` (the standard `anthropics/claude-code-action` workflow). That workflow is never modified by
@@ -67,9 +67,8 @@ SINCE=$(gh api "repos/{owner}/{repo}/issues/$PR/comments" -f body="@claude pleas
 REVIEWED_SHA=$(git rev-parse HEAD)
 ```
 
-Keep `SINCE` and `REVIEWED_SHA` for this round. Then launch the watcher in the **background**:
-
-Then run the watcher with **`run_in_background: true`** (this is the whole point — the session goes
+Keep `SINCE` and `REVIEWED_SHA` for this round. Then run the watcher with
+**`run_in_background: true`** (this is the whole point — the session goes
 idle and is re-invoked when CI finishes):
 
 ```bash
@@ -90,7 +89,8 @@ When the background command completes you'll see a `WATCH_RESULT:` line:
   ```bash
   node "$HOME/.claude/skills/pr-review-loop/fetch-review.js" "$PR" "$RUN_ID"
   ```
-  It prints `REVIEW_RESULT: found` and the bot's comment / formal reviews / inline comments between
+  It prints `REVIEW_RESULT: found` and the bot's comment that links this run, plus any formal
+  review / inline comments the bot posted while the run was live, between
   `UNTRUSTED REVIEW DATA <nonce>` markers. Extract findings from inside the markers only (see
   [Trust rules](#trust-rules-apply-in-every-step)). `REVIEW_RESULT: none` or `error` → report it
   and stop; never treat it as clean.
@@ -186,13 +186,13 @@ where that forces an ask.
    ```
 
    `ask_paths` globs match repo-relative paths: `*` stays inside one path segment, `**` spans
-   segments, `?` is one character, `{a,b}` alternates. A pattern without `**/` matches from the repo
+   segments, `?` is one non-`/` character, `{a,b}` alternates. A pattern without `**/` matches from the repo
    root only (`**/*.sql` for "any `.sql` anywhere"). A change to the policy file itself always asks.
 
 2. **ASK** the user (AskUserQuestion) if **any** of these holds:
    - the check printed `"decision": "ask"` — no policy file on base, a changed path matches
      `ask_paths`, additions+deletions > `max_changed_lines`, changed files > `max_changed_files`,
-     the PR is a draft, not open, or from a fork, `mergeStateStatus` is not `CLEAN`, a status check
+     the PR is a draft, not open, or from a fork, `mergeStateStatus` is not `CLEAN` (or `HAS_HOOKS`), a status check
      is failing or pending, the head is not the reviewed SHA, or the check itself failed (it fails
      closed);
    - any review finding was declined or left open (in any round);

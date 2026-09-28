@@ -84,6 +84,16 @@ function install() {
   console.log('');
 }
 
+// A cloned repo can ship `.github` or `.claude` as a symlink; never create files through one.
+function symlinkedPart(base, dest) {
+  let p = base;
+  for (const part of path.relative(base, path.dirname(dest)).split(path.sep)) {
+    p = path.join(p, part);
+    if (isSymlink(p)) return p;
+  }
+  return null;
+}
+
 function init() {
   if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
     warn(`This doesn't look like a git repository (${dim(process.cwd())}).`);
@@ -91,6 +101,14 @@ function init() {
   }
   const destDir = path.join(process.cwd(), '.github', 'workflows');
   const dest = path.join(destDir, 'claude.yml');
+  const policyDest = path.join(process.cwd(), '.claude', 'pr-review-loop.json');
+  for (const d of [dest, policyDest]) {
+    const link = symlinkedPart(process.cwd(), d);
+    if (link) {
+      warn(`${link} is a symlink — refusing to create files through it.`);
+      process.exit(1);
+    }
+  }
 
   console.log('');
   if (fs.existsSync(dest)) {
@@ -99,7 +117,6 @@ function init() {
     copyFile(path.join(TEMPLATE_SRC, 'claude.yml'), dest);
     ok('Scaffolded .github/workflows/claude.yml');
   }
-  const policyDest = path.join(process.cwd(), '.claude', 'pr-review-loop.json');
   if (fs.existsSync(policyDest)) {
     info(`.claude/pr-review-loop.json already exists — leaving it untouched.`);
   } else {
