@@ -2,3 +2,4 @@
 *.sh text eol=lf
 bin/cli.js text eol=lf
 skill/merge-policy.js text eol=lf
+skill/fetch-review.js text eol=lf

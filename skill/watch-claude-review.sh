@@ -9,89 +9,118 @@
 # is untouched.
 #
 # Usage: watch-claude-review.sh <pr-number> <since-iso8601-utc>
-#   <since> = the GitHub createdAt of our "@claude please review" comment (the API returns it on the
-#   server clock, so there is NO local/remote clock-skew to handle).
+#   <since> = the GitHub created_at of our "@claude please review" comment (server clock, so there
+#   is NO local/remote clock-skew to handle), e.g. 2026-09-29T10:00:00Z.
 #
-# Correlation is by TIMESTAMP, not headSha: every claude.yml run fires on `issue_comment` and (on
-# this repo) executes against the default branch, so ALL runs share main's headSha regardless of
-# which PR the comment was on. Our run is therefore the OLDEST claude.yml issue_comment run created
-# at/after <since> — i.e. the first run triggered once our comment landed — EXCLUDING runs that
-# concluded "skipped". The claude-code-action posts its own status/eyes comment, which fires a
-# sibling claude.yml run that the job's `if:` condition skips; that skipped sibling is often created
-# at (or within a second of) our @claude comment, so a naive "oldest at/after <since>" match latches
-# onto it instead of the real review. We therefore prefer the oldest NON-skipped run, and fall back
-# to a skipped run only when no real run appears (so a genuine non-trigger still reports "skipped").
+# Environment (optional):
+#   PR_REVIEW_LOOP_WORKFLOW   workflow file name (default claude.yml)
+#   PR_REVIEW_LOOP_TIMEOUT    minutes to wait for the run to finish (default 60)
+#
+# Correlation is by TIMESTAMP + TRIGGERING ACTOR (+ PR title), not headSha: every claude.yml run
+# fires on `issue_comment` and executes against the default branch, so ALL runs share the default
+# branch's headSha regardless of which PR the comment was on. Our run is the OLDEST claude.yml
+# issue_comment run created at/after <since> that WE triggered (triggering_actor = the gh user) and
+# that did not conclude "skipped", preferring runs whose title is this PR's title. Filtering on the
+# triggering actor drops runs started by anyone else's comment — including the action's own status
+# comment, which fires a sibling run the job's `if:` skips — so a stranger's concurrent "@claude"
+# can never be mistaken for ours. The REST `actor=` query filter does NOT do this for issue_comment
+# runs (it returns bot-triggered siblings too), so the filter is applied client-side.
 
 set -uo pipefail
 
 PR="${1:-}"
 SINCE="${2:-}"
-WORKFLOW="claude.yml"
-DISCOVERY_TRIES=60   # ~180s — `gh run list` has been observed NOT surfacing a run for well over
+WORKFLOW="${PR_REVIEW_LOOP_WORKFLOW:-claude.yml}"
+TIMEOUT_MIN="${PR_REVIEW_LOOP_TIMEOUT:-60}"
+DISCOVERY_TRIES=60   # ~180s — the runs API has been observed NOT surfacing a run for well over
 DISCOVERY_SLEEP=3    # 90s after it was created (see the re-confirm step below), so be patient.
 
-if [ -z "$PR" ] || [ -z "$SINCE" ]; then
-  echo "WATCH_RESULT: error  usage: watch-claude-review.sh <pr> <since-iso8601>"
+if ! [[ "$PR" =~ ^[0-9]+$ ]] || ! [[ "$SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]]; then
+  echo "WATCH_RESULT: error  usage: watch-claude-review.sh <pr-number> <since-iso8601-utc, e.g. 2026-09-29T10:00:00Z>"
+  exit 2
+fi
+if ! [[ "$WORKFLOW" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] || ! [[ "$TIMEOUT_MIN" =~ ^[0-9]+$ ]]; then
+  echo "WATCH_RESULT: error  PR_REVIEW_LOOP_WORKFLOW must be a workflow file name and PR_REVIEW_LOOP_TIMEOUT a number of minutes"
   exit 2
 fi
 
-# --- Discovery: our run = oldest claude.yml issue_comment run created at/after SINCE whose
-# conclusion is NOT "skipped" (queued/in-progress runs have an empty conclusion, so they qualify).
-# This skips the action's own skipped status-comment sibling; see the header note.
+ME=$(gh api user --jq '.login' 2>/dev/null || true)
+if ! [[ "$ME" =~ ^[A-Za-z0-9-]+$ ]]; then
+  ME=""
+  echo "NOTE: could not resolve the gh user; discovery falls back to timestamp only."
+fi
+PR_TITLE=$(gh pr view "$PR" --json title --jq '.title' 2>/dev/null || true)
+
+ACTOR_FILTER='true'
+[ -n "$ME" ] && ACTOR_FILTER=".triggering_actor.login == \"$ME\""
+
+# Prints "id<TAB>display_title" per matching run, oldest first. $1 = "skipped" or "not-skipped".
+list_runs() {
+  local cmp='!='
+  [ "$1" = "skipped" ] && cmp='=='
+  gh api "repos/{owner}/{repo}/actions/workflows/$WORKFLOW/runs?event=issue_comment&per_page=100" \
+    --jq "[.workflow_runs[] | select(.created_at >= \"$SINCE\") | select($ACTOR_FILTER) | select(.conclusion $cmp \"skipped\")] | sort_by(.created_at) | .[] | \"\(.id)\t\(.display_title)\"" \
+    2>/dev/null || true
+}
+
+# First run whose title is this PR's title; otherwise the first run at all.
+pick_run() {
+  local first="" id title
+  while IFS=$'\t' read -r id title; do
+    [ -z "$id" ] && continue
+    [ -z "$first" ] && first="$id"
+    if [ -n "$PR_TITLE" ] && [ "$title" = "$PR_TITLE" ]; then echo "$id"; return; fi
+  done
+  echo "$first"
+}
+
+# --- Discovery
 RUN_ID=""
 for _ in $(seq 1 "$DISCOVERY_TRIES"); do
-  RUN_ID=$(gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 50 \
-    --json databaseId,createdAt,conclusion \
-    --jq "[.[] | select(.createdAt >= \"$SINCE\") | select(.conclusion != \"skipped\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
-    2>/dev/null || true)
+  RUN_ID=$(list_runs not-skipped | pick_run)
   [ -n "$RUN_ID" ] && break
   sleep "$DISCOVERY_SLEEP"
 done
 
 # Fallback: no non-skipped run appeared in the window. Before concluding that the comment did not
-# trigger a review, RE-CONFIRM after a pause. Observed 2026-07-25 on PR #227: the real review run was
-# created 1s after SINCE, yet the discovery query returned empty for the entire window and the watcher
-# reported the skipped sibling — the run simply was not surfaced by `gh run list` yet (the query
-# returns it correctly when replayed later). A skipped-run verdict is therefore only trustworthy if
-# it still holds after the API has had more time.
+# trigger a review, RE-CONFIRM after a pause: a real run has been observed to stay invisible to the
+# runs API for the whole discovery window and show up on a later query. A skipped-run verdict is
+# therefore only trustworthy if it still holds after the API has had more time.
 if [ -z "$RUN_ID" ]; then
   sleep 30
-  RUN_ID=$(gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 100 \
-    --json databaseId,createdAt,conclusion \
-    --jq "[.[] | select(.createdAt >= \"$SINCE\") | select(.conclusion != \"skipped\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
-    2>/dev/null || true)
-
+  RUN_ID=$(list_runs not-skipped | pick_run)
   if [ -n "$RUN_ID" ]; then
     echo "NOTE: the real run only became visible on the re-confirm poll (API lag) — using it."
   else
-    RUN_ID=$(gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 100 \
-      --json databaseId,createdAt,conclusion \
-      --jq "[.[] | select(.createdAt >= \"$SINCE\") | select(.conclusion == \"skipped\")] | sort_by(.createdAt) | .[0].databaseId // empty" \
-      2>/dev/null || true)
-
-    # Whatever we conclude, show the candidates so a wrong verdict is diagnosable rather than silent.
+    RUN_ID=$(list_runs skipped | pick_run)
     if [ -n "$RUN_ID" ]; then
-      echo "NOTE: only skipped run(s) found at/after $SINCE. Candidates seen:"
-      gh run list --workflow="$WORKFLOW" --event=issue_comment --limit 100 \
-        --json databaseId,createdAt,status,conclusion \
-        --jq "[.[] | select(.createdAt >= \"$SINCE\")] | sort_by(.createdAt) | .[] | \"  \(.createdAt)  id=\(.databaseId)  \(.status)/\(.conclusion)\"" \
-        2>/dev/null || true
-      echo "If a non-skipped run appears above, this was API lag — re-watch it directly:"
-      echo "  gh run watch <id>"
+      echo "NOTE: only skipped run(s) found at/after $SINCE. If the workflow gates on author_association,"
+      echo "check that the account that posted the trigger comment is allowed to run it."
     fi
   fi
 fi
 
 if [ -z "$RUN_ID" ]; then
   echo "WATCH_RESULT: no_run  pr=$PR  since=$SINCE"
-  echo "No claude.yml run registered at/after the comment within the discovery window — the '@claude'"
+  echo "No $WORKFLOW run registered at/after the comment within the discovery window — the '@claude'"
   echo "comment likely did not trigger the workflow (verify the comment posted and the workflow is enabled)."
   exit 0
 fi
 
-# --- Wait for completion: gh run watch is a server-side long-poll; the agent is idle until it returns.
-# --exit-status makes gh exit non-zero on a failed run; swallow it so we can report the conclusion.
-gh run watch "$RUN_ID" --exit-status >/dev/null 2>&1 || true
+# --- Wait for completion, bounded. A run stuck in the queue (no runner) would otherwise block forever.
+DEADLINE=$(( $(date +%s) + TIMEOUT_MIN * 60 ))
+STATUS=""
+while :; do
+  STATUS=$(gh run view "$RUN_ID" --json status --jq '.status' 2>/dev/null || echo "")
+  [ "$STATUS" = "completed" ] && break
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    URL=$(gh run view "$RUN_ID" --json url --jq '.url' 2>/dev/null || echo "")
+    echo "WATCH_RESULT: timeout  pr=$PR  run=$RUN_ID  status=${STATUS:-unknown}  url=$URL"
+    echo "The run did not finish within ${TIMEOUT_MIN} minutes. Inspect it; do not parse findings."
+    exit 0
+  fi
+  sleep 10
+done
 
 CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion' 2>/dev/null || echo "unknown")
 URL=$(gh run view "$RUN_ID" --json url --jq '.url' 2>/dev/null || echo "")
@@ -99,8 +128,9 @@ URL=$(gh run view "$RUN_ID" --json url --jq '.url' 2>/dev/null || echo "")
 echo "WATCH_RESULT: done  pr=$PR  run=$RUN_ID  conclusion=$CONCLUSION  url=$URL"
 case "$CONCLUSION" in
   success)
-    echo "The review run completed. Fetch the NEWEST @claude output on PR #$PR (check both the PR"
-    echo "issue-comments and review-comments streams, use whichever is newest) and handle findings."
+    echo "The review run completed. Fetch the review THIS run produced (it verifies the author and the"
+    echo "run link) and handle its findings:"
+    echo "  node \"\$HOME/.claude/skills/pr-review-loop/fetch-review.js\" $PR $RUN_ID"
     ;;
   skipped)
     echo "The matched run was SKIPPED (the comment may not have contained '@claude', or the job's"
