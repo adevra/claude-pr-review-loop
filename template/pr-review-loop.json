@@ -1,0 +1,14 @@
+{
+  "ask_paths": [
+    ".github/**",
+    "**/migrations/**",
+    "**/*.sql",
+    "**/auth/**",
+    "**/billing/**",
+    "**/payments/**",
+    "package.json",
+    "package-lock.json"
+  ],
+  "max_changed_lines": 1500,
+  "max_changed_files": 25
+}
