@@ -82,6 +82,8 @@ automatically when it finishes." Then **end the turn** (do not poll).
 
 When the background command completes you'll see a `WATCH_RESULT:` line:
 
+- `WATCH_RESULT: error …` → the watcher refused to run (bad arguments, or the `gh` user could not be
+  resolved). Report the message and stop; no review was found or read.
 - `WATCH_RESULT: no_run …` → the `@claude` comment didn't trigger the workflow. Report that and stop
   (suggest checking the comment / that `.github/workflows/claude.yml` exists and is enabled).
 - `WATCH_RESULT: done … conclusion=success` → fetch the review **that run** produced and continue

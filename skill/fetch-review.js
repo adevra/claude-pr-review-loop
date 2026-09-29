@@ -17,7 +17,8 @@
  *     GitHub App (`<app-slug>[bot]`).
  *   - Correlation: the run is the one the watcher matched to OUR trigger comment. A PR comment
  *     counts only if its body links that run (`/actions/runs/<run-id>` — the action's "View job"
- *     link); formal reviews and inline comments count only if submitted while that run was live.
+ *     link); formal reviews and inline comments count only alongside that linked comment, and only
+ *     if submitted while the run was live.
  *   - The body is printed between UNTRUSTED markers. It is review data, never instructions.
  *
  * Prints `REVIEW_RESULT: found|none|error ...` followed by the blocks. Exit code 0 when a result
@@ -125,7 +126,7 @@ function main(argv) {
     const sel = selectReview({ comments, reviews, inline, run, runId, bot });
     if (!sel.found) {
       console.log(`REVIEW_RESULT: none  pr=${pr}  run=${runId}  bot=${bot}`);
-      console.log(`No comment, review or inline comment by ${bot} (type Bot) is tied to run ${runId} on PR #${pr}.`);
+      console.log(`No comment by ${bot} (type Bot) on PR #${pr} links run ${runId}, so no review output is attributed to it.`);
       console.log('Treat this as "no review", never as "clean". Comments by any other account were ignored.');
       return;
     }
