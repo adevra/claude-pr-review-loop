@@ -1,14 +1,20 @@
 {
   "ask_paths": [
     ".github/**",
+    ".claude/**",
+    "**/CODEOWNERS",
     "**/migrations/**",
     "**/*.sql",
-    "**/auth/**",
-    "**/billing/**",
-    "**/payments/**",
-    "package.json",
-    "package-lock.json"
+    "**/{auth,authentication,security,permissions}/**",
+    "**/{billing,payments,checkout}/**",
+    "**/{.env,.env.*,*.pem,*.key,*.p12,*.keystore}",
+    "**/{secrets,credentials}*",
+    "**/{package.json,package-lock.json,yarn.lock,pnpm-lock.yaml,bun.lockb,bun.lock}",
+    "**/{requirements*.txt,poetry.lock,Pipfile.lock,uv.lock,go.mod,go.sum,Cargo.toml,Cargo.lock,Gemfile.lock,composer.lock}",
+    "**/{Dockerfile,docker-compose*.yml,*.tf,*.tfvars}",
+    "**/{terraform,infra,k8s,helm,deploy}/**"
   ],
   "max_changed_lines": 1500,
-  "max_changed_files": 25
+  "max_changed_files": 25,
+  "merge_method": "squash"
 }

@@ -35,8 +35,14 @@ const ok = (s) => console.log(`${green('✓')} ${s}`);
 const info = (s) => console.log(`${cyan('›')} ${s}`);
 const warn = (s) => console.log(`${yellow('!')} ${s}`);
 
+function isSymlink(p) {
+  try { return fs.lstatSync(p).isSymbolicLink(); } catch (_) { return false; }
+}
+
+// Never write THROUGH a symlink: a link at the destination is replaced, not followed.
 function copyFile(src, dest) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
+  if (isSymlink(dest)) fs.unlinkSync(dest);
   fs.copyFileSync(src, dest);
 }
 
@@ -45,22 +51,29 @@ function install() {
     console.error(`Cannot find packaged skill at ${SKILL_SRC}`);
     process.exit(1);
   }
+  if (isSymlink(SKILL_DEST)) {
+    warn(`${SKILL_DEST} is a symlink (a development link?) — not writing through it.`);
+    warn('Update the linked checkout instead, or remove the link and run the installer again.');
+    process.exit(1);
+  }
   const existed = fs.existsSync(SKILL_DEST);
   fs.mkdirSync(SKILL_DEST, { recursive: true });
 
+  const written = [];
   for (const file of fs.readdirSync(SKILL_SRC)) {
     const src = path.join(SKILL_SRC, file);
-    if (!fs.statSync(src).isFile()) continue;
+    if (!fs.lstatSync(src).isFile()) continue;
     const dest = path.join(SKILL_DEST, file);
     copyFile(src, dest);
+    written.push(dest);
     if (file.endsWith('.sh')) {
       try { fs.chmodSync(dest, 0o755); } catch (_) { /* best effort (no-op on Windows) */ }
     }
   }
 
   console.log('');
-  ok(`${existed ? 'Updated' : 'Installed'} the ${bold('/pr-review-loop')} skill`);
-  console.log(`  ${dim(SKILL_DEST)}`);
+  ok(`${existed ? 'Updated' : 'Installed'} the ${bold('/pr-review-loop')} skill (version ${require('../package.json').version})`);
+  for (const f of written) console.log(`  ${dim('wrote')} ${f}`);
   console.log('');
   info(`It's now available in ${bold('every')} Claude Code session. Restart any open session to load it.`);
   console.log('');
@@ -71,6 +84,16 @@ function install() {
   console.log('');
 }
 
+// A cloned repo can ship `.github` or `.claude` as a symlink; never create files through one.
+function symlinkedPart(base, dest) {
+  let p = base;
+  for (const part of path.relative(base, path.dirname(dest)).split(path.sep)) {
+    p = path.join(p, part);
+    if (isSymlink(p)) return p;
+  }
+  return null;
+}
+
 function init() {
   if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
     warn(`This doesn't look like a git repository (${dim(process.cwd())}).`);
@@ -78,6 +101,14 @@ function init() {
   }
   const destDir = path.join(process.cwd(), '.github', 'workflows');
   const dest = path.join(destDir, 'claude.yml');
+  const policyDest = path.join(process.cwd(), '.claude', 'pr-review-loop.json');
+  for (const d of [dest, policyDest]) {
+    const link = symlinkedPart(process.cwd(), d);
+    if (link) {
+      warn(`${link} is a symlink — refusing to create files through it.`);
+      process.exit(1);
+    }
+  }
 
   console.log('');
   if (fs.existsSync(dest)) {
@@ -86,13 +117,15 @@ function init() {
     copyFile(path.join(TEMPLATE_SRC, 'claude.yml'), dest);
     ok('Scaffolded .github/workflows/claude.yml');
   }
-  const policyDest = path.join(process.cwd(), '.claude', 'pr-review-loop.json');
   if (fs.existsSync(policyDest)) {
     info(`.claude/pr-review-loop.json already exists — leaving it untouched.`);
   } else {
     copyFile(path.join(TEMPLATE_SRC, 'pr-review-loop.json'), policyDest);
     ok(`Scaffolded .claude/pr-review-loop.json ${dim('(auto-mode merge policy — edit ask_paths for this repo)')}`);
   }
+  console.log('');
+  console.log(bold('Before you commit') + ' — the scaffolded workflow only lets OWNER/MEMBER/COLLABORATOR comments');
+  console.log('trigger it and pins actions to commit SHAs. Read the README "Security" section before loosening that.');
   console.log('');
   console.log(bold('One required secret') + ' — the workflow needs a Claude Code OAuth token:');
   console.log(`  ${dim('1.')} Generate one:  ${cyan('claude setup-token')}`);
@@ -105,7 +138,10 @@ function init() {
 
 function uninstall() {
   console.log('');
-  if (fs.existsSync(SKILL_DEST)) {
+  if (isSymlink(SKILL_DEST)) {
+    fs.unlinkSync(SKILL_DEST);
+    ok(`Removed the link ${SKILL_DEST} (its target was left untouched)`);
+  } else if (fs.existsSync(SKILL_DEST)) {
     fs.rmSync(SKILL_DEST, { recursive: true, force: true });
     ok(`Removed ${SKILL_DEST}`);
   } else {

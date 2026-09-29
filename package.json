@@ -1,6 +1,6 @@
 {
   "name": "claude-pr-review-loop",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Install the /pr-review-loop skill for Claude Code globally — request the repo's @claude CI review and drive the fix loop, event-driven, in-session.",
   "bin": {
     "claude-pr-review-loop": "bin/cli.js",
@@ -11,10 +11,11 @@
     "skill/",
     "template/",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/merge-policy.test.js && node bin/cli.js help"
+    "test": "node test/merge-policy.test.js && node test/fetch-review.test.js && node bin/cli.js help"
   },
   "engines": {
     "node": ">=16"
